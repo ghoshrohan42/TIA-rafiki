@@ -1,0 +1,509 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Africa Country Game</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<style>
+  :root {
+    --bg: #f5f2eb;
+    --panel: #fffdf8;
+    --border: #d9d4ca;
+    --text: #22211f;
+    --muted: #6e6a62;
+    --neutral: #d8d3c9;
+    --clicked: #77736c;
+    --green: #2e8b57;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .wrap {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 24px 18px 36px;
+  }
+  h1 { margin: 0 0 4px; font-size: 29px; }
+  .subtitle { color: var(--muted); margin-bottom: 18px; }
+  .toolbar {
+    display: flex;
+    gap: 9px;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+  button {
+    min-height: 44px;
+    padding: 10px 16px;
+    border: 0;
+    border-radius: 9px;
+    background: #242321;
+    color: white;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  button:hover { background: #45433f; }
+  button:focus-visible { outline: 3px solid #9fc5e8; outline-offset: 2px; }
+
+  .target, .stat {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 10px 13px;
+  }
+  .target { min-width: 220px; }
+  .target strong { font-weight: 750; }
+  .stats { display: flex; gap: 7px; flex-wrap: wrap; }
+  .stat strong { margin-left: 5px; }
+  #status {
+    color: var(--muted);
+    font-size: 14px;
+    margin-left: auto;
+  }
+
+  #map {
+    width: 100%;
+    height: 680px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+
+  .instructions {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.5;
+    margin-top: 11px;
+  }
+
+  .answer {
+    position: fixed;
+    z-index: 20;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: min(360px, calc(100vw - 32px));
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 23px;
+    text-align: center;
+    box-shadow: 0 18px 55px rgba(0,0,0,.22);
+    display: none;
+  }
+  .answer-country { font-size: 29px; font-weight: 800; margin: 5px 0 14px; }
+  .answer button { margin-top: 3px; }
+
+  .island-note {
+    display: none;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  @media (max-width: 720px) {
+    .wrap { padding: 18px 11px 30px; }
+    #map { height: 560px; }
+    #status { width: 100%; margin-left: 0; }
+    .target { flex: 1; min-width: 0; }
+  }
+</style>
+</head>
+
+<body>
+<main class="wrap">
+  <h1>Africa — Country Game</h1>
+  <div class="subtitle">Generate a country, find it on the map, and build your streak.</div>
+
+  <div class="toolbar">
+    <button id="generate" type="button">Generate Country</button>
+    <button id="locate" type="button">Locate Country</button>
+
+    <div class="target">Target: <strong id="target">—</strong></div>
+
+    <div class="stats">
+      <div class="stat">Points <strong id="score">0/10</strong></div>
+      <div class="stat">Streak <strong id="streak">0</strong></div>
+      <div class="stat">Longest <strong id="longest">0</strong></div>
+    </div>
+
+    <div id="status">Press Generate Country to start.</div>
+  </div>
+
+  <div id="map" aria-label="Interactive political map of Africa"></div>
+
+  <div class="instructions">
+    Click a country to reveal its name. Correct answers add one point, increase your
+    streak, and immediately generate the next target. A wrong answer resets the current
+    streak but not your points. At 10 points the round resets. Locate Country reveals the target and resets the
+    current round and streak, while preserving your longest streak.
+  </div>
+</main>
+
+<div class="answer" id="answer">
+  <div>You clicked</div>
+  <div class="answer-country" id="answerCountry"></div>
+  <div id="answerResult"></div>
+  <button id="closeAnswer" type="button">Continue</button>
+</div>
+
+<script>
+"use strict";
+
+/*
+  ARCHITECTURE
+  -------------
+  1. countries = immutable game data.
+  2. game = score/streak/target state; it knows nothing about Plotly.
+  3. mapColors = exactly one colour per country.
+  4. renderMap() is the only function that changes the map.
+  5. UI events change game state, then call renderMap().
+*/
+
+const countries = [
+  ["DZA","Algeria"], ["AGO","Angola"], ["BEN","Benin"], ["BWA","Botswana"],
+  ["BFA","Burkina Faso"], ["BDI","Burundi"], ["CMR","Cameroon"], ["CPV","Cape Verde"],
+  ["CAF","Central African Republic"], ["TCD","Chad"], ["COM","Comoros"],
+  ["COG","Republic of the Congo"], ["COD","Democratic Republic of the Congo"],
+  ["CIV","Côte d'Ivoire"], ["DJI","Djibouti"], ["EGY","Egypt"],
+  ["GNQ","Equatorial Guinea"], ["ERI","Eritrea"], ["SWZ","Eswatini"],
+  ["ETH","Ethiopia"], ["GAB","Gabon"], ["GMB","The Gambia"], ["GHA","Ghana"],
+  ["GIN","Guinea"], ["GNB","Guinea-Bissau"], ["KEN","Kenya"], ["LSO","Lesotho"],
+  ["LBR","Liberia"], ["LBY","Libya"], ["MDG","Madagascar"], ["MWI","Malawi"],
+  ["MLI","Mali"], ["MRT","Mauritania"], ["MUS","Mauritius"], ["MAR","Morocco"],
+  ["MOZ","Mozambique"], ["NAM","Namibia"], ["NER","Niger"], ["NGA","Nigeria"],
+  ["RWA","Rwanda"], ["STP","São Tomé and Príncipe"], ["SEN","Senegal"],
+  ["SYC","Seychelles"], ["SLE","Sierra Leone"], ["SOM","Somalia"],
+  ["ZAF","South Africa"], ["SSD","South Sudan"], ["SDN","Sudan"],
+  ["TZA","Tanzania"], ["TGO","Togo"], ["TUN","Tunisia"], ["UGA","Uganda"],
+  ["ZMB","Zambia"], ["ZWE","Zimbabwe"]
+];
+
+const ISO = countries.map(c => c[0]);
+const NAME_BY_ISO = new Map(countries);
+
+const COLORS = {
+  neutral: "#d8d3c9",
+  clicked: "#77736c",
+  target: "#2e8b57"
+};
+
+/*
+  Game state is deliberately independent of Plotly.
+*/
+const game = {
+  targetISO: null,
+  score: 0,
+  streak: 0,
+  longest: 0,
+  roundTransitionPending: false
+};
+
+let mapColours = ISO.map(() => COLORS.neutral);
+let plotReady = false;
+
+/*
+  This is the ONLY map trace.
+  We use a choropleth with z values 0,1,2 and a discrete colorscale.
+  Therefore the colour of each country is controlled by mapColours -> z.
+*/
+const trace = {
+  type: "choropleth",
+  locationmode: "ISO-3",
+  locations: ISO,
+  z: ISO.map(() => 0),
+  text: ISO.map(code => NAME_BY_ISO.get(code)),
+  hovertemplate: "<b>%{text}</b><extra></extra>",
+  colorscale: [
+    [0.00, COLORS.neutral],
+    [0.3333, COLORS.neutral],
+    [0.3334, COLORS.clicked],
+    [0.6666, COLORS.clicked],
+    [0.6667, COLORS.target],
+    [1.00, COLORS.target]
+  ],
+  zmin: 0,
+  zmax: 2,
+  showscale: false,
+  marker: {
+    line: {
+      color: "#77736c",
+      width: 0.65
+    }
+  }
+};
+
+
+/*
+  Tiny island countries are difficult to see at an Africa-wide scale.
+  These are clickable locator markers at their geographic positions.
+  They are deliberately separate from the country choropleth so they
+  do not interfere with the 54-country game logic.
+*/
+const islandCodes = ["CPV", "STP", "COM", "MUS", "SYC"];
+
+const islandCoordinates = {
+  CPV: { lon: -23.605, lat: 15.12 },
+  STP: { lon: 6.613, lat: 0.186 },
+  COM: { lon: 43.25, lat: -11.70 },
+  MUS: { lon: 57.50, lat: -20.20 },
+  SYC: { lon: 55.45, lat: -4.62 }
+};
+
+const islandTrace = {
+  type: "scattergeo",
+  mode: "markers",
+  lon: islandCodes.map(code => islandCoordinates[code].lon),
+  lat: islandCodes.map(code => islandCoordinates[code].lat),
+  text: islandCodes.map(code => NAME_BY_ISO.get(code)),
+  customdata: islandCodes,
+  hovertemplate: "<b>%{text}</b><extra></extra>",
+  marker: {
+    size: 11,
+    color: COLORS.neutral,
+    line: { color: "#77736c", width: 1.2 },
+    opacity: 0.96
+  },
+  showlegend: false
+};
+
+const layout = {
+  margin: { l: 0, r: 0, t: 0, b: 0 },
+  paper_bgcolor: "#fffdf8",
+  plot_bgcolor: "#fffdf8",
+  geo: {
+    scope: "africa",
+    projection: { type: "mercator" },
+    showframe: false,
+    showcoastlines: true,
+    coastlinecolor: "#77736c",
+    showcountries: true,
+    countrycolor: "#77736c",
+    showland: true,
+    landcolor: "#fffdf8",
+    bgcolor: "#fffdf8",
+    lataxis: { range: [-36, 38] },
+    lonaxis: { range: [-20, 55] }
+  }
+};
+
+function colourToZ(colour) {
+  if (colour === COLORS.clicked) return 1;
+  if (colour === COLORS.target) return 2;
+  return 0;
+}
+
+function renderMap() {
+  if (!plotReady) return;
+
+  const z = mapColours.map(colourToZ);
+
+  /*
+    IMPORTANT: the country polygons and island markers share the same
+    game colour state. The island trace is only a visual/clickable proxy
+    for the five tiny island countries.
+  */
+  Plotly.restyle("map", {
+    z: [z]
+  }, [0]);
+
+  const islandColours = islandCodes.map(code => {
+    const index = ISO.indexOf(code);
+    return index >= 0 ? mapColours[index] : COLORS.neutral;
+  });
+
+  Plotly.restyle("map", {
+    "marker.color": [islandColours]
+  }, [1]);
+}
+
+function resetMap() {
+  mapColours = ISO.map(() => COLORS.neutral);
+  renderMap();
+}
+
+function highlightCountry(iso, colour) {
+  mapColours = ISO.map(code => code === iso ? colour : COLORS.neutral);
+  renderMap();
+}
+
+function updateStats() {
+  document.getElementById("score").textContent = game.score + "/10";
+  document.getElementById("streak").textContent = String(game.streak);
+  document.getElementById("longest").textContent = String(game.longest);
+}
+
+function chooseTarget() {
+  const index = Math.floor(Math.random() * countries.length);
+  game.targetISO = countries[index][0];
+  document.getElementById("target").textContent = countries[index][1];
+}
+
+function generateCountry() {
+  game.score = 0;
+  game.streak = 0;
+  game.roundTransitionPending = false;
+
+  chooseTarget();
+  resetMap();
+  updateStats();
+
+  document.getElementById("answer").style.display = "none";
+  document.getElementById("status").textContent = "Find it on the map…";
+}
+
+function locateCountry() {
+  if (!game.targetISO) {
+    document.getElementById("status").textContent = "Generate a country first.";
+    return;
+  }
+
+  /*
+    Locate deliberately forfeits the current run.
+    Longest is NOT changed.
+  */
+  game.score = 0;
+  game.streak = 0;
+
+  highlightCountry(game.targetISO, COLORS.target);
+  updateStats();
+
+  document.getElementById("answer").style.display = "none";
+  document.getElementById("status").textContent =
+    NAME_BY_ISO.get(game.targetISO) +
+    " located • score and streak reset";
+}
+
+function handleCountryClick(clickedISO) {
+  if (!NAME_BY_ISO.has(clickedISO)) return;
+
+  const clickedName = NAME_BY_ISO.get(clickedISO);
+
+  /*
+    Always reveal the clicked country visually.
+  */
+  highlightCountry(clickedISO, COLORS.clicked);
+
+  document.getElementById("answerCountry").textContent = clickedName;
+
+  if (!game.targetISO) {
+    document.getElementById("answerResult").textContent =
+      "Press Generate Country to start a round.";
+    document.getElementById("status").textContent = clickedName;
+    document.getElementById("answer").style.display = "block";
+    return;
+  }
+
+  if (clickedISO === game.targetISO) {
+    game.score += 1;
+    game.streak += 1;
+
+    if (game.streak > game.longest) {
+      game.longest = game.streak;
+    }
+
+    updateStats();
+
+    if (game.score >= 10) {
+      /*
+        Ten correct answers complete the round.
+        Longest streak survives; score and current streak restart at zero.
+      */
+      document.getElementById("answerResult").textContent =
+        "✓ Correct — 10/10! Round complete.";
+      document.getElementById("status").textContent =
+        "Round complete • longest streak: " + game.longest;
+
+      game.score = 0;
+      game.streak = 0;
+      chooseTarget();
+      resetMap();
+      updateStats();
+
+      document.getElementById("answer").style.display = "block";
+      return;
+    }
+
+    /*
+      Every correct answer immediately advances to a NEW target.
+      Score and streak carry forward into the next round question.
+    */
+    document.getElementById("answerResult").textContent =
+      "✓ Correct — " + game.score + "/10. New country!";
+    document.getElementById("status").textContent =
+      "Correct • streak " + game.streak + " • next target ready";
+
+    chooseTarget();
+    resetMap();
+    updateStats();
+  } else {
+    /*
+      A wrong guess loses the streak, but points remain.
+    */
+    game.streak = 0;
+    updateStats();
+
+    document.getElementById("answerResult").textContent =
+      "Not the target — streak reset.";
+    document.getElementById("status").textContent =
+      clickedName + " • " + game.score + "/10 • streak 0";
+  }
+
+  document.getElementById("answer").style.display = "block";
+}
+
+function showMapError(error) {
+  console.error(error);
+  document.getElementById("map").innerHTML =
+    '<div style="padding:24px;color:#7a2e2e">' +
+    '<strong>The map could not be loaded.</strong><br>' +
+    'Please open this file with an internet connection so Plotly can load the map data.' +
+    '</div>';
+  document.getElementById("status").textContent = "Map failed to load.";
+}
+
+/*
+  Initialisation happens exactly once.
+*/
+Plotly.newPlot("map", [trace, islandTrace], layout, {
+  responsive: true,
+  displayModeBar: false
+}).then(() => {
+  plotReady = true;
+
+  document.getElementById("generate").addEventListener(
+    "click", generateCountry
+  );
+
+  document.getElementById("locate").addEventListener(
+    "click", locateCountry
+  );
+
+  document.getElementById("closeAnswer").addEventListener(
+    "click", () => {
+      document.getElementById("answer").style.display = "none";
+    }
+  );
+
+  document.getElementById("map").on("plotly_click", event => {
+    const point = event && event.points && event.points[0];
+    if (!point) return;
+
+    // Country polygons use location; island proxy markers use customdata.
+    const clickedISO = point.location || point.customdata;
+    if (!clickedISO || !NAME_BY_ISO.has(clickedISO)) return;
+
+    handleCountryClick(clickedISO);
+  });
+
+  updateStats();
+}).catch(showMapError);
+</script>
+</body>
+</html>
